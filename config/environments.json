@@ -12,17 +12,7 @@
     },
     "QA": {
       "description": "QA environment",
-      "branchStrategy": "USER_SELECTED",
-      "sourceBranch": ""
-    },
-    "DEV-POC": {
-      "description": "Developer proof-of-concept environment",
-      "branchStrategy": "USER_SELECTED",
-      "sourceBranch": ""
-    },
-    "DEV-HOTFIX": {
-      "description": "Developer hotfix environment",
-      "branchStrategy": "USER_SELECTED",
+      "branchStrategy": "USER_SELECTED_RELEASE",
       "sourceBranch": ""
     },
     "CUSTOM": {

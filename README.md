@@ -20,24 +20,34 @@ $HOME/Documents/projects/cpps/feature/CPPS-1234-price-update/
 └── gciosdd_pps_admin/
 ```
 
-## Environment rules
+## Environments
 
-- **DEV** → create feature branch from `master`.
-- **TEST** → discover current-year release branches matching
-  `<year>-release-X.Y`, find the common branches across selected repositories,
-  and use the highest common release.
-- **QA** → ask for source branch.
-- **DEV-POC** → ask for source branch.
-- **DEV-HOTFIX** → ask for source branch.
-- **CUSTOM** → ask for source branch.
+### DEV
 
-For 2026, TEST branches look like:
+Uses:
 
-```text
-2026-release-7.1
-2026-release-7.2
-2026-release-8.0
-```
+`master`
+
+### TEST
+
+Automatically discovers release branches available in all
+selected repositories and selects the highest/common release branch.
+
+Example:
+
+`2026-release-7.1`
+
+### QA
+
+Discovers release branches available in all selected repositories
+and presents them to the user for selection.
+
+Example:
+
+````text
+1. 2026-release-7.1
+2. 2026-release-7.0
+3. 2026-release-6.9
 
 ## Feature branch behavior
 
@@ -51,7 +61,7 @@ DEV
 master
   ↓
 feature/CPPS-1234-price-update
-```
+````
 
 or:
 

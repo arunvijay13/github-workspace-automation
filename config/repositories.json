@@ -2,21 +2,25 @@
   "repositories": [
     {
       "name": "gciosdd_pps_web",
+      "workspaceName": "web",
       "owner": "caterpillar-inc",
       "description": "PPS Web"
     },
     {
       "name": "gciosdd_pps_price_manager",
+      "workspaceName": "manager",
       "owner": "caterpillar-inc",
       "description": "PPS Price Manager"
     },
     {
       "name": "gciosdd_pps_publish",
+      "workspaceName": "publish",
       "owner": "caterpillar-inc",
       "description": "PPS Publish"
     },
     {
       "name": "gciosdd_pps_admin",
+      "workspaceName": "admin",
       "owner": "caterpillar-inc",
       "description": "PPS Admin"
     }
