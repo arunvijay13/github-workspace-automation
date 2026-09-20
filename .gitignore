@@ -1,0 +1,9 @@
+logs/*
+!logs/.gitkeep
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.tmp
+.env
+.env.*

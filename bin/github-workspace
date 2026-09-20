@@ -1,0 +1,246 @@
+#!/bin/bash
+set -Eeuo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-$HOME/Documents/projects/cpps}"
+export PROJECT_ROOT WORKSPACE_ROOT
+
+source "$PROJECT_ROOT/lib/common.sh"
+source "$PROJECT_ROOT/lib/github.sh"
+source "$PROJECT_ROOT/lib/git.sh"
+source "$PROJECT_ROOT/lib/environment.sh"
+source "$PROJECT_ROOT/lib/repository.sh"
+
+ENVIRONMENT=""
+SOURCE_BRANCH=""
+FEATURE_BRANCH=""
+FEATURE_WORKSPACE=""
+SELECTED_REPOSITORY_INDEXES=()
+CREATED_REPOSITORIES=()
+REUSED_REPOSITORIES=()
+FAILED_REPOSITORIES=()
+MERGED_REPOSITORIES=()
+
+check_dependencies(){
+  require_command git "Install Git."
+  require_command gh "Install GitHub CLI: brew install gh"
+  require_command jq "Install jq: brew install jq"
+}
+get_current_year(){ date '+%Y'; }
+
+get_feature_branch(){
+  local branch
+  echo
+  echo "========================================="
+  echo "          Feature Branch"
+  echo "========================================="
+  echo "Example: feature/CPPS-1234-price-update"
+  echo
+  while true; do
+    read -r -p "Feature branch: " branch
+    [[ -n "$branch" ]] || { log_error "Feature branch cannot be empty."; continue; }
+    git_validate_branch_name "$branch" || { log_error "Invalid Git branch name: $branch"; continue; }
+    FEATURE_BRANCH="$branch"
+    return 0
+  done
+}
+
+display_repositories(){
+  local count="$(get_repository_count)" i
+  echo
+  echo "========================================="
+  echo "          Select Repository"
+  echo "========================================="
+  echo
+  for ((i=0;i<count;i++)); do
+    printf "%d) %-35s - %s\n" "$((i+1))" "$(get_repository_name "$i")" "$(get_repository_description "$i")"
+  done
+  echo
+  printf "%d) All repositories\n" "$((count+1))"
+  printf "%d) Exit\n" "$((count+2))"
+  echo
+}
+
+select_repositories(){
+  local count="$(get_repository_count)" all=$((count+1)) exitopt=$((count+2)) s i
+  while true; do
+    display_repositories
+    read -r -p "Enter your choice: " s
+    [[ "$s" =~ ^[0-9]+$ ]] || { log_error "Please enter a valid number."; continue; }
+    if ((s==exitopt)); then exit 0; fi
+    if ((s==all)); then
+      SELECTED_REPOSITORY_INDEXES=()
+      for ((i=0;i<count;i++)); do SELECTED_REPOSITORY_INDEXES+=("$i"); done
+      return 0
+    fi
+    if ((s>=1 && s<=count)); then SELECTED_REPOSITORY_INDEXES=("$((s-1))"); return 0; fi
+    log_error "Invalid selection."
+  done
+}
+
+github_get_current_year_release_branches(){
+  local repo="$1" year="$(get_current_year)"
+  gh api "repos/${repo}/branches?per_page=100" --paginate --jq '.[].name' |
+    awk -v y="$year" '$0 ~ ("^" y "-release-[0-9]+(\\.[0-9]+)*$") {print}'
+}
+
+sort_release_branches(){
+  awk '{
+    b=$0; split(b,p,"-"); year=p[1]; split(p[3],v,".");
+    major=v[1]; minor=v[2]; if(minor=="") minor=0;
+    printf "%010d %010d %010d %s\n",year,major,minor,b
+  }' | sort -k1,1nr -k2,2nr -k3,3nr | awk '{print $4}'
+}
+
+resolve_test_branch_for_selection(){
+  local common="" first=true i repo branches
+  echo
+  echo "========================================="
+  echo "       Resolving TEST Release Branch"
+  echo "========================================="
+  echo
+  log_info "Current year: $(get_current_year)"
+  log_info "Expected format: $(get_current_year)-release-X.Y"
+  for i in "${SELECTED_REPOSITORY_INDEXES[@]}"; do
+    repo="$(get_full_repository_name "$i")"
+    log_info "Checking release branches: $repo"
+    branches="$(github_get_current_year_release_branches "$repo" || true)"
+    [[ -n "$branches" ]] || { log_error "No current-year release branches found in $repo"; return 1; }
+    echo "Release branches in $repo:"
+    printf '%s\n' "$branches" | sort_release_branches | sed 's/^/  - /'
+    if $first; then common="$branches"; first=false
+    else common="$(comm -12 <(printf '%s\n' "$common" | sort) <(printf '%s\n' "$branches" | sort))"
+    fi
+  done
+  [[ -n "$common" ]] || { log_error "No common TEST release branch exists across selected repositories."; return 1; }
+  SOURCE_BRANCH="$(printf '%s\n' "$common" | sort_release_branches | head -n1)"
+  log_success "TEST source branch: $SOURCE_BRANCH"
+}
+
+resolve_source_branch(){
+  case "$ENVIRONMENT" in
+    DEV) SOURCE_BRANCH="master";;
+    TEST) resolve_test_branch_for_selection || return 1;;
+    QA|DEV-POC|DEV-HOTFIX|CUSTOM)
+      while ! SOURCE_BRANCH="$(get_user_source_branch)"; do :; done;;
+    *) log_error "Unsupported environment: $ENVIRONMENT"; return 1;;
+  esac
+  echo
+  echo "Environment   : $ENVIRONMENT"
+  echo "Source branch : $SOURCE_BRANCH"
+  echo "Feature branch: $FEATURE_BRANCH"
+  echo "Workspace     : $FEATURE_WORKSPACE"
+}
+
+prepare_feature_workspace(){
+  FEATURE_WORKSPACE="$WORKSPACE_ROOT/$FEATURE_BRANCH"
+  mkdir -p "$FEATURE_WORKSPACE"
+  log_success "Feature workspace: $FEATURE_WORKSPACE"
+}
+
+process_repository(){
+  local i="$1" repo name dest local_exists=false remote_exists=false answer
+  repo="$(get_full_repository_name "$i")"
+  name="$(get_repository_name "$i")"
+  dest="$FEATURE_WORKSPACE/$name"
+
+  echo
+  echo "-----------------------------------------"
+  log_info "Processing: $repo"
+  echo "-----------------------------------------"
+
+  github_repository_exists "$repo" || { log_error "GitHub repository inaccessible: $repo"; FAILED_REPOSITORIES+=("$name"); return 1; }
+
+  if [[ ! -d "$dest/.git" ]]; then
+    if [[ -e "$dest" ]]; then
+      log_error "Destination exists but is not a Git repository: $dest"
+      FAILED_REPOSITORIES+=("$name"); return 1
+    fi
+    github_clone_repository "$repo" "$dest" || { FAILED_REPOSITORIES+=("$name"); return 1; }
+  else
+    log_info "Repository already exists in feature workspace; skipping clone."
+  fi
+
+  git -C "$dest" fetch origin --prune || { log_error "Git fetch failed: $name"; FAILED_REPOSITORIES+=("$name"); return 1; }
+  git_source_branch_exists "$dest" "$SOURCE_BRANCH" || { log_error "Source branch does not exist: $repo/$SOURCE_BRANCH"; FAILED_REPOSITORIES+=("$name"); return 1; }
+
+  git_branch_exists_local "$dest" "$FEATURE_BRANCH" && local_exists=true
+  git_branch_exists_remote "$dest" "$FEATURE_BRANCH" && remote_exists=true
+
+  if [[ "$local_exists" == false && "$remote_exists" == false ]]; then
+    log_info "Feature branch does not exist. Creating from $SOURCE_BRANCH."
+    git_create_feature_branch "$dest" "$SOURCE_BRANCH" "$FEATURE_BRANCH" ||
+      { log_error "Failed to create feature branch."; FAILED_REPOSITORIES+=("$name"); return 1; }
+    log_success "Created feature branch: $FEATURE_BRANCH"
+    CREATED_REPOSITORIES+=("$name")
+    return 0
+  fi
+
+  log_info "Feature branch already exists: $FEATURE_BRANCH"
+
+  if ! git_is_clean "$dest"; then
+    log_error "Working tree has uncommitted changes: $name"
+    FAILED_REPOSITORIES+=("$name"); return 1
+  fi
+
+  if [[ "$local_exists" == true ]]; then
+    git_switch_feature_branch "$dest" "$FEATURE_BRANCH" || { FAILED_REPOSITORIES+=("$name"); return 1; }
+  else
+    git -C "$dest" switch --track -c "$FEATURE_BRANCH" "origin/$FEATURE_BRANCH" ||
+      { log_error "Unable to track remote feature branch."; FAILED_REPOSITORIES+=("$name"); return 1; }
+  fi
+
+  echo
+  read -r -p "Feature branch already exists. Pull latest changes from $SOURCE_BRANCH into $FEATURE_BRANCH for $name? [y/N]: " answer
+  if [[ "$answer" =~ ^[Yy]$ ]]; then
+    git_merge_source_into_feature "$dest" "$SOURCE_BRANCH" ||
+      { log_error "Merge failed for $name. Resolve conflicts manually."; FAILED_REPOSITORIES+=("$name"); return 1; }
+    log_success "Latest $SOURCE_BRANCH changes merged into $FEATURE_BRANCH."
+    MERGED_REPOSITORIES+=("$name")
+  else
+    log_info "Existing feature branch kept unchanged."
+  fi
+  REUSED_REPOSITORIES+=("$name")
+}
+
+display_summary(){
+  echo
+  echo "========================================="
+  echo "             Final Summary"
+  echo "========================================="
+  echo
+  echo "Environment   : $ENVIRONMENT"
+  echo "Source branch : $SOURCE_BRANCH"
+  echo "Feature branch: $FEATURE_BRANCH"
+  echo "Workspace     : $FEATURE_WORKSPACE"
+  echo
+  (( ${#CREATED_REPOSITORIES[@]} )) && { echo "Created:"; printf '  ✓ %s\n' "${CREATED_REPOSITORIES[@]}"; echo; }
+  (( ${#REUSED_REPOSITORIES[@]} )) && { echo "Reused:"; printf '  - %s\n' "${REUSED_REPOSITORIES[@]}"; echo; }
+  (( ${#MERGED_REPOSITORIES[@]} )) && { echo "Source changes merged:"; printf '  ↻ %s\n' "${MERGED_REPOSITORIES[@]}"; echo; }
+  (( ${#FAILED_REPOSITORIES[@]} )) && { echo "Failed:"; printf '  ✗ %s\n' "${FAILED_REPOSITORIES[@]}"; echo; return 1; }
+  log_success "Workspace preparation completed successfully."
+}
+
+main(){
+  echo
+  echo "========================================="
+  echo "     GitHub Workspace Automation"
+  echo "========================================="
+  echo
+  check_dependencies
+  validate_repository_config || die "Repository configuration validation failed."
+  validate_environment_config || die "Environment configuration validation failed."
+  github_check_auth || exit 1
+  get_feature_branch
+  select_environment
+  select_repositories
+  prepare_feature_workspace
+  resolve_source_branch || exit 1
+  echo
+  read -r -p "Continue? [y/N]: " confirmation
+  [[ "$confirmation" =~ ^[Yy]$ ]] || { log_info "Operation cancelled."; exit 0; }
+  local i
+  for i in "${SELECTED_REPOSITORY_INDEXES[@]}"; do process_repository "$i" || log_warn "Repository processing failed."; done
+  display_summary
+}
+main "$@"

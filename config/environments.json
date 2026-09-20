@@ -1,0 +1,34 @@
+{
+  "environments": {
+    "DEV": {
+      "description": "Development environment",
+      "branchStrategy": "FIXED",
+      "sourceBranch": "master"
+    },
+    "TEST": {
+      "description": "Test environment",
+      "branchStrategy": "LATEST_RELEASE",
+      "sourceBranch": ""
+    },
+    "QA": {
+      "description": "QA environment",
+      "branchStrategy": "USER_SELECTED",
+      "sourceBranch": ""
+    },
+    "DEV-POC": {
+      "description": "Developer proof-of-concept environment",
+      "branchStrategy": "USER_SELECTED",
+      "sourceBranch": ""
+    },
+    "DEV-HOTFIX": {
+      "description": "Developer hotfix environment",
+      "branchStrategy": "USER_SELECTED",
+      "sourceBranch": ""
+    },
+    "CUSTOM": {
+      "description": "Custom environment",
+      "branchStrategy": "USER_SELECTED",
+      "sourceBranch": ""
+    }
+  }
+}
