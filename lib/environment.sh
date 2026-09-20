@@ -169,21 +169,49 @@ select_qa_release_branch() {
 }
 
 select_custom_source_branch() {
+    local repositories=("$@")
+    local branch
+    local repository
+    local invalid_repositories=()
+
     echo
 
     while true; do
-        read -r -p "Enter source branch: " SOURCE_BRANCH
+        read -r -p "Enter source branch: " branch
 
-        if [[ -z "$SOURCE_BRANCH" ]]; then
+        if [[ -z "$branch" ]]; then
             log_warn "Source branch cannot be empty."
             continue
         fi
 
-        if ! git_validate_branch_name "$SOURCE_BRANCH"; then
-            log_warn "Invalid Git branch name: $SOURCE_BRANCH"
+        if ! git_validate_branch_name "$branch"; then
+            log_warn "Invalid Git branch name: $branch"
             continue
         fi
 
+        invalid_repositories=()
+
+        for repository in "${repositories[@]}"; do
+            if ! gh api \
+                "repos/${repository}/branches/${branch}" \
+                >/dev/null 2>&1; then
+
+                invalid_repositories+=("$repository")
+            fi
+        done
+
+        if [[ "${#invalid_repositories[@]}" -gt 0 ]]; then
+            log_error "Source branch '$branch' was not found in all selected repositories."
+
+            for repository in "${invalid_repositories[@]}"; do
+                log_error "  Missing: ${repository##*/}"
+            done
+
+            echo
+            continue
+        fi
+
+        SOURCE_BRANCH="$branch"
         break
     done
 
@@ -212,7 +240,7 @@ resolve_source_branch() {
             ;;
 
         CUSTOM)
-            select_custom_source_branch
+            select_custom_source_branch "${repositories[@]}"
             ;;
 
         *)
